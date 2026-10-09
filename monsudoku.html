@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>monSudokuV3</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f4f4; font-family: Arial, "Noto Sans Thai", sans-serif; color: #222;
+         display: flex; flex-direction: column; align-items: center; padding: 10px; }
+  .row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; margin: 6px 0; }
+  label.title { font-weight: bold; font-size: 15px; }
+  select { font-size: 15px; padding: 4px 6px; }
+  button { color: #fff; border: 2px outset #ddd; border-radius: 3px; padding: 7px 12px; font-size: 14px;
+           font-weight: bold; cursor: pointer; font-family: inherit; }
+  button:disabled { opacity: .5; cursor: wait; }
+  #btnNew   { background: #2E7D32; } #btnNew:hover   { background: #1B5E20; }
+  #btnHint  { background: #E65100; } #btnHint:hover  { background: #BF360C; }
+  #btnSurr  { background: #C62828; } #btnSurr:hover  { background: #8E0000; }
+  #btnClear { background: #263238; } #btnClear:hover { background: #000A12; }
+  #btnSol   { background: #6A1B9A; } #btnSol:hover   { background: #4A148C; }
+  #status { font-size: 14px; color: gray; margin: 6px 0; text-align: center; min-height: 20px; }
+  #timer  { font-size: 17px; font-weight: bold; color: #37474F; margin-bottom: 6px; }
+  #board  { background: #fff; border: 2px solid #888; width: 100%; max-width: 600px; height: auto; touch-action: manipulation; }
+  #pad { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; width: 100%; max-width: 600px; margin-top: 8px; }
+  #pad button { background: #455A64; padding: 10px 0; font-size: 18px; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center;
+             justify-content: center; z-index: 10; }
+  .overlay.show { display: flex; }
+  .dialog { background: #f4f4f4; padding: 24px 30px; border-radius: 6px; text-align: center; max-width: 92vw; }
+  .dialog h3 { margin: 0 0 8px; }
+  .dialog p { color: #455A64; margin: 6px 0 14px; }
+  .dialog input { font-size: 18px; text-align: center; width: 180px; padding: 4px; }
+  .dialog .btns { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<div class="row">
+  <label class="title">โหมดเกม:</label>
+  <label><input type="radio" name="mode" value="Classic" checked> Classic</label>
+  <label><input type="radio" name="mode" value="Variant"> MON Sudoku</label>
+</div>
+<div class="row">
+  <label class="title">ระดับความยาก:</label>
+  <select id="diff">
+    <option>ง่ายมาก</option><option>ง่าย</option><option selected>ปานกลาง</option><option>ยาก</option><option>ยากมาก</option>
+  </select>
+  <button id="btnNew">เริ่มเกมใหม่</button>
+</div>
+<div class="row">
+  <button id="btnHint">💡 ขอคำใบ้</button>
+  <button id="btnSurr">ยอมแพ้</button>
+  <button id="btnClear">🗑 ลบตัวเลข (บนกติกาพิเศษ)</button>
+  <button id="btnSol">🔑 ดูเฉลย</button>
+</div>
+
+<div id="status">กรุณาเลือกโหมด/ระดับความยาก และกด 'เริ่มเกมใหม่'</div>
+<div id="timer">⏱ เวลา: 00:00</div>
+
+<canvas id="board" width="600" height="600"></canvas>
+<div id="pad"></div>
+
+<!-- หน้าต่าง "พร้อมหรือยัง?" -->
+<div class="overlay" id="readyWin">
+  <div class="dialog">
+    <h3>🧩 กระดานพร้อมแล้ว!</h3>
+    <p>เมื่อกดปุ่ม 'พร้อม' โจทย์จะปรากฏและเริ่มจับเวลาทันที</p>
+    <button id="btnReady" style="background:#2E7D32;font-size:16px;width:150px">✅ พร้อม</button>
+  </div>
+</div>
+
+<!-- หน้าต่างกรอกรหัสดูเฉลย -->
+<div class="overlay" id="codeWin">
+  <div class="dialog">
+    <h3>🔒 กรุณากรอกรหัสเพื่อดูเฉลย</h3>
+    <input type="password" id="codeInput" autocomplete="off">
+    <div class="btns">
+      <button id="codeOk" style="background:#2E7D32;width:100px">ยืนยัน</button>
+      <button id="codeCancel" style="background:#616161;width:100px">ยกเลิก</button>
+    </div>
+  </div>
+</div>
+
+<!-- หน้าต่างเฉลย -->
+<div class="overlay" id="solWin">
+  <div class="dialog" style="background:#fff">
+    <h3 style="color:#4A148C">เฉลยคำตอบทั้งหมด</h3>
+    <canvas id="solCanvas" width="408" height="408" style="max-width:100%;border:1px solid #888"></canvas>
+    <div class="btns"><button id="solClose" style="background:#263238;width:140px">ปิดหน้าต่าง</button></div>
+  </div>
+</div>
+
+<script type="text/plain" id="core">
+// ==========================================================
+// พอร์ตจาก sudoku_core.py (Python/DEAP/PuLP) เป็น JavaScript ล้วน
+// โครงสร้างฟังก์ชัน/คลาส/ชื่อเมธอดคงตามต้นฉบับ
+// ต้องมีตัวแปรส่วนกลาง HIGHS (solver) และ PULP_AVAILABLE (เหมือน flag เดิม)
+// ==========================================================
+
+// ---------- ตัวช่วยแทนโมดูล random ของ Python ----------
+function randint(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }   // random.randint (รวมปลายทั้งสอง)
+function shuffle(arr, rnd) {                                                      // random.shuffle / rng.shuffle
+  rnd = rnd || Math.random;
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+class SeededRandom {                                                              // random.Random(seed)
+  constructor(seed) { this.s = seed >>> 0; }
+  random() {                                                                      // mulberry32
+    this.s = (this.s + 0x6D2B79F5) >>> 0;
+    let t = this.s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  shuffle(arr) { shuffle(arr, () => this.random()); }
+  choice(arr) { return arr[Math.floor(this.random() * arr.length)]; }
+}
+function hashTuple(ind) {                                                         // hash(tuple(ind))
+  let h = 2166136261;
+  for (const v of ind) { h ^= (v + 1); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+const K = (r, c) => r + "," + c;   // แทน tuple (r, c) ที่ใช้เป็นสมาชิกของ set/dict
+
+// ==========================================
+// ส่วนที่ 1: การตั้งค่าคงที่ (Fix Parameters)
+// ==========================================
+class GameConfig {}
+GameConfig.SIZE = 9;
+GameConfig.SUB_SIZE = 3;
+// --- MOO WEIGHTS ---
+GameConfig.WEIGHT_SYMMETRY = 0.3;   // w_sym
+GameConfig.WEIGHT_BALANCE = 0.2;    // w_bal
+GameConfig.WEIGHT_SPACE = 0.5;      // w_space
+
+// ==========================================
+// ส่วนที่ 2: สร้าง Classic Sudoku
+//   Phase I  : สร้างกระดานเฉลยด้วย Integer Linear Programming (HiGHS แทน PuLP+CBC)
+//   Phase II : เจาะช่อง + ตรวจความเป็นคำตอบเดียวด้วย Backtracking
+// ==========================================
+function is_valid(board, r, c, num) {
+  for (let i = 0; i < 9; i++) {
+    if (board[r][i] === num || board[i][c] === num) return false;
+  }
+  const start_r = 3 * Math.floor(r / 3), start_c = 3 * Math.floor(c / 3);
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      if (board[start_r + i][start_c + j] === num) return false;
+  return true;
+}
+
+// ---------- Phase I (ILP) ----------
+function solve_board_lp(time_limit = 30) {
+  /*
+    สร้างกระดานเฉลย 9x9 ด้วยโมเดล ILP
+      ตัวแปร  x[i][j][k] ∈ {0,1}  (=1 ถ้าช่อง (i,j) เป็นเลข k)
+      สมการ (1) แต่ละแถวมีเลข k ตัวเดียว
+            (2) แต่ละหลักมีเลข k ตัวเดียว
+            (3) แต่ละตารางย่อย 3x3 มีเลข k ตัวเดียว
+            (4) แต่ละช่องมีเลขเดียว
+            (5) givens: บังคับแถวแรกเป็น permutation สุ่มของ 1-9
+                เพื่อให้ได้กระดานไม่ซ้ำกันในแต่ละเกม
+            (17) v_ij = sum_k k * x_ijk  แปลงกลับเป็นเลข 1-9
+    คืนค่า grid 9x9 หรือ null ถ้าแก้ไม่ได้
+  */
+  const idx = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+  const digits = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const X = (i, j, k) => `x_${i}_${j}_${k}`;
+
+  let lp = "Maximize\n obj: 0 " + X(0, 0, 1) + "\nSubject To\n";   // feasibility problem (ไม่มี objective จริง)
+  let n = 0;
+  const addEq = (terms) => { lp += ` c${n++}: ${terms.join(" + ")} = 1\n`; };
+
+  // (4) หนึ่งช่อง หนึ่งเลข
+  for (const i of idx) for (const j of idx) addEq(digits.map(k => X(i, j, k)));
+
+  for (const k of digits) {
+    for (const i of idx) addEq(idx.map(j => X(i, j, k)));            // (1) แถว
+    for (const j of idx) addEq(idx.map(i => X(i, j, k)));            // (2) หลัก
+    for (let p = 0; p < 3; p++)                                      // (3) ตารางย่อย 3x3
+      for (let q = 0; q < 3; q++) {
+        const t = [];
+        for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) t.push(X(3 * p + a, 3 * q + b, k));
+        addEq(t);
+      }
+  }
+
+  // (5) givens: แถวแรกเป็น permutation สุ่ม
+  const perm = digits.slice();
+  shuffle(perm);
+  for (const j of idx) addEq([X(0, j, perm[j])]);
+
+  lp += "Binary\n";
+  for (const i of idx) for (const j of idx) for (const k of digits) lp += ` ${X(i, j, k)}\n`;
+  lp += "End\n";
+
+  const result = HIGHS.solve(lp, { output_flag: false, time_limit: time_limit });
+  if (result.Status !== "Optimal") return null;
+
+  // (17) แปลงไบนารีกลับเป็นตัวเลข
+  return idx.map(i => idx.map(j =>
+    digits.reduce((s, k) => s + k * Math.round(result.Columns[X(i, j, k)].Primal), 0)));
+}
+
+// ---------- Backtracking (ใช้เป็นตัวสำรองเมื่อ solver ใช้งานไม่ได้) ----------
+function solve_board(board) {
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      if (board[r][c] === 0) {
+        const nums = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        shuffle(nums);
+        for (const num of nums) {
+          if (is_valid(board, r, c, num)) {
+            board[r][c] = num;
+            if (solve_board(board)) return true;
+            board[r][c] = 0;
+          }
+        }
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function build_solution_board() {
+  // คืน [grid, ชื่อวิธีที่ใช้] — ลอง ILP ก่อน ถ้าไม่ได้ค่อยถอยไปใช้ backtracking
+  if (PULP_AVAILABLE) {
+    try {
+      const grid = solve_board_lp();
+      if (grid !== null) return [grid, "LP"];
+    } catch (e) {
+      console.log("Phase I (LP) ใช้งานไม่ได้ ถอยไปใช้ backtracking:", e);
+    }
+  }
+  const grid = Array.from({ length: 9 }, () => Array(9).fill(0));
+  solve_board(grid);
+  return [grid, "Backtracking"];
+}
+
+// ---------- Phase II ----------
+function count_solutions(board, t) {
+  if (t[0] > 1) return t;
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      if (board[r][c] === 0) {
+        for (let num = 1; num <= 9; num++) {
+          if (is_valid(board, r, c, num)) {
+            board[r][c] = num;
+            count_solutions(board, t);
+            board[r][c] = 0;
+          }
+        }
+        return t;
+      }
+    }
+  }
+  t[0] += 1;
+  return t;
+}
+
+function generate_sudoku(difficulty_clues) {
+  // ---- Phase I: สร้างกระดานเฉลยด้วย LP ----
+  const [x, method] = build_solution_board();
+
+  // ---- Phase II: เจาะช่องพร้อมตรวจ uniqueness ----
+  const z = Array.from({ length: 9 }, () => Array(9).fill(1));
+  const y = Array.from({ length: 9 }, () => Array(9).fill(1));
+
+  const positions = [];
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) positions.push([r, c]);
+  shuffle(positions);
+
+  let clues_count = 81;
+  for (const [i, j] of positions) {
+    if (clues_count <= difficulty_clues) break;
+    z[i][j] = 0;
+    const temp_puzzle = [];
+    for (let r = 0; r < 9; r++) {
+      temp_puzzle.push([]);
+      for (let c = 0; c < 9; c++) temp_puzzle[r].push(z[r][c] === 1 ? x[r][c] : 0);
+    }
+    const t = [0];
+    count_solutions(temp_puzzle, t);
+
+    if (t[0] > 1) z[i][j] = 1;
+    else if (t[0] === 1) {
+      y[i][j] = z[i][j];
+      clues_count -= 1;
+    }
+  }
+
+  const final_puzzle = [];
+  for (let r = 0; r < 9; r++) {
+    final_puzzle.push([]);
+    for (let c = 0; c < 9; c++) final_puzzle[r].push(y[r][c] === 1 ? x[r][c] : 0);
+  }
+  return [final_puzzle, x, clues_count, method];
+}
+
+// ==========================================
+// ส่วนที่ 3: GA สำหรับออกแบบกฎพิเศษ
+// แก้ไข: ป้องกันไม่ให้ cage / thermo / modulo ทับกัน
+// ==========================================
+class ConstraintDesignerBase {
+  constructor(base_grid, counts, size = 9) {
+    this.grid = base_grid;
+    this.size = size;
+    [this.n_cages, this.n_thermos, this.n_modulos] = counts;
+    this.total_items = this.n_cages + this.n_thermos + this.n_modulos;
+    this.gene_len = this.total_items * 2;
+
+    this.cage_templates = [
+      [[0, 0]],
+      [[0, 0], [0, 1]],
+      [[0, 0], [1, 0]],
+      [[0, 0], [0, 1], [0, 2]],
+      [[0, 0], [1, 0], [2, 0]],
+      [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]],
+      [[0, 0], [0, 1], [0, 2], [1, 1], [2, 1]],
+      [[0, 0], [0, 1], [1, 0], [1, 1]],
+      [[0, 0], [0, 1], [1, 1], [1, 2]]
+    ];
+  }
+
+  pick_cage_template(r, c, blocked_cells, rng = null) {
+    // blocked_cells = เซลล์ที่ถูกใช้แล้วโดย cage อื่น, thermo, หรือ modulo ทั้งหมด
+    const order = this.cage_templates.map((_, i) => i);
+    if (rng) rng.shuffle(order); else shuffle(order);
+    for (const t_idx of order) {
+      const template = this.cage_templates[t_idx];
+      const cells = template.map(([dr, dc]) => [r + dr, c + dc]);
+
+      const in_bounds = cells.every(([nr, nc]) => nr >= 0 && nr < this.size && nc >= 0 && nc < this.size);
+      const no_overlap = cells.every(([nr, nc]) => !blocked_cells.has(K(nr, nc)));
+
+      if (in_bounds && no_overlap) return template;
+    }
+
+    if (r >= 0 && r < this.size && c >= 0 && c < this.size && !blocked_cells.has(K(r, c))) {
+      return [[0, 0]];
+    }
+    return [];
+  }
+
+  run_dfs_thermo_overlap(r, c, blocked_cells, max_len = 9) {
+    // blocked_cells = เซลล์ที่ถูกใช้แล้วโดย thermo อื่น, cage, หรือ modulo ทั้งหมด
+    if (blocked_cells.has(K(r, c))) return [];
+
+    const directions = [
+      [-1, 0], [1, 0], [0, -1], [0, 1],
+      [-1, 1], [1, 1], [-1, -1], [1, -1]
+    ];
+    const memo = new Map();
+    const grid = this.grid, size = this.size;
+
+    const longest_from = (cr, cc, path_visited) => {
+      const mk = K(cr, cc);
+      if (memo.has(mk)) return memo.get(mk);
+
+      let best_next = [];
+      for (const [dr, dc] of directions) {
+        const nr = cr + dr, nc = cc + dc;
+        if (nr >= 0 && nr < size && nc >= 0 && nc < size) {
+          if (grid[nr][nc] > grid[cr][cc] &&
+              !blocked_cells.has(K(nr, nc)) &&
+              !path_visited.has(K(nr, nc))) {
+
+            const next_visited = new Set(path_visited);
+            next_visited.add(K(nr, nc));
+            const sub_path = longest_from(nr, nc, next_visited);
+            if (sub_path.length > best_next.length) best_next = sub_path;
+          }
+        }
+      }
+
+      let result = [[cr, cc]].concat(best_next);
+      if (result.length > max_len) result = result.slice(0, max_len);
+      memo.set(mk, result);
+      return result;
+    };
+
+    return longest_from(r, c, new Set([K(r, c)]));
+  }
+
+  decode(ind, for_eval = false) {
+    const ind_seed = hashTuple(ind);
+    const rng = new SeededRandom(ind_seed);
+
+    const cages = [], thermos = [], modulos = [];
+    const cage_palette = ["#D32F2F", "#1976D2", "#388E3C", "#FBC02D", "#8E24AA", "#F57C00", "#0288D1", "#7CB342", "#C2185B", "#512DA8", "#0097A6", "#E64A19"];
+    // สีเทอร์โมโทนพาสเทล (จางๆ) เพื่อให้ตัวเลขที่วาดทับอ่านง่ายขึ้น
+    const thermo_palette = [
+      "#90CAF9", "#FFCC80", "#A5D6A7", "#F8BBD0", "#CE93D8", "#80DEEA",
+      "#BCAAA4", "#FFE082", "#EF9A9A", "#9FA8DA", "#80CBC4", "#B0BEC5"
+    ];
+
+    // เซลล์ที่ถูกใช้แล้วโดยกติกาประเภทใดก็ตาม ใช้ set เดียวร่วมกันเพื่อกันการทับกันข้ามประเภท
+    const occupied = new Set();
+    const cage_occupied = new Set();
+    const thermo_occupied = new Set();
+    let total_req_cells = 0;
+    let idx = 0;
+
+    // -1. Pre-scan: เก็บพิกัด "จุดเริ่มต้น" ดิบของกติกาทุกตัวจาก genome ไว้ก่อน
+    // (ยังไม่ขยายเป็น template/path ใดๆ) เพื่อใช้เป็นรายการเซลล์ต้องห้าม
+    // ป้องกันไม่ให้กติกาที่ decode ก่อน ขยายรูปร่างไปทับจุดเริ่มต้นของกติกาอื่น
+    // ที่ยังไม่ถูก decode (ไม่ว่าจะเป็น cage, thermo หรือ modulo ก็ตาม)
+    const all_start_points = new Set();
+
+    let ci = 0;
+    for (let n = 0; n < this.n_cages; n++) {
+      if (ci + 1 >= ind.length) break;
+      all_start_points.add(K(ind[ci], ind[ci + 1]));
+      ci += 2;
+    }
+
+    let ti = this.n_cages * 2;
+    for (let n = 0; n < this.n_thermos; n++) {
+      if (ti + 1 >= ind.length) break;
+      all_start_points.add(K(ind[ti], ind[ti + 1]));
+      ti += 2;
+    }
+
+    const modulo_start_idx = (this.n_cages + this.n_thermos) * 2;
+    let mi = modulo_start_idx;
+    for (let n = 0; n < this.n_modulos; n++) {
+      if (mi + 1 >= ind.length) break;
+      all_start_points.add(K(ind[mi], ind[mi + 1]));
+      mi += 2;
+    }
+
+    const blocked_cells_for = (own_point) => {
+      // เซลล์ต้องห้าม = เซลล์ที่ถูกใช้ไปแล้วจริง + จุดเริ่มต้นดิบของกติกา "อื่น" ทุกตัว
+      // (ไม่รวมจุดเริ่มต้นของตัวเองที่กำลัง decode อยู่)
+      const others = new Set(all_start_points);
+      others.delete(own_point);
+      return new Set([...occupied, ...others]);
+    };
+
+    // 0. Decode Modulo ก่อน (จุดเดียว กินพื้นที่น้อยสุด วางให้เสร็จก่อนเพื่อกันชนกับกรง/เทอร์โม)
+    // NOTE: ต้องอ่าน gene ของ modulo หลังสุดตามลำดับเดิม (cages -> thermos -> modulos)
+    let m_idx = modulo_start_idx;
+    for (let n = 0; n < this.n_modulos; n++) {
+      if (m_idx + 1 >= ind.length) break;
+      const r = ind[m_idx], c = ind[m_idx + 1];
+      m_idx += 2;
+      if (occupied.has(K(r, c))) continue;  // เซลล์นี้ถูกใช้แล้ว ข้าม modulo นี้ไป
+      occupied.add(K(r, c));
+      modulos.push([[r, c], [2, this.grid[r][c] % 2]]);
+      total_req_cells += 1;
+    }
+
+    // 1. Decode Cages
+    const placed_cages = [];
+    for (let n = 0; n < this.n_cages; n++) {
+      if (idx + 1 >= ind.length) break;
+      const r = ind[idx], c = ind[idx + 1];
+      idx += 2;
+
+      const blocked = blocked_cells_for(K(r, c));
+      const template = this.pick_cage_template(r, c, blocked, rng);
+      if (!template.length) continue;
+
+      const current_cage = [];
+      for (const [dr, dc] of template) {
+        const nr = r + dr, nc = c + dc;
+        current_cage.push([nr, nc]);
+        cage_occupied.add(K(nr, nc));
+        occupied.add(K(nr, nc));
+      }
+
+      total_req_cells += template.length;
+      if (current_cage.length) {
+        const s = current_cage.reduce((a, [x, y]) => a + this.grid[x][y], 0);
+        const expanded_area = new Set();
+        for (const [cr, cc] of current_cage)
+          for (const dr of [-1, 0, 1]) for (const dc of [-1, 0, 1]) expanded_area.add(K(cr + dr, cc + dc));
+        const used_colors = new Set();
+        for (const [p_path, p_col] of placed_cages)
+          if (p_path.some(([a, b]) => expanded_area.has(K(a, b)))) used_colors.add(p_col);
+        const avail_colors = cage_palette.filter(col => !used_colors.has(col));
+        const chosen_col = avail_colors.length ? avail_colors[0] : rng.choice(cage_palette);
+
+        placed_cages.push([current_cage, chosen_col]);
+        cages.push([s, current_cage, chosen_col]);
+      }
+    }
+
+    // 2. Decode Thermos
+    const placed_thermos = [];
+    idx = this.n_cages * 2;
+    for (let n = 0; n < this.n_thermos; n++) {
+      if (idx + 1 >= ind.length) break;
+      const r = ind[idx], c = ind[idx + 1];
+      idx += 2;
+
+      const blocked = blocked_cells_for(K(r, c));
+      const path = this.run_dfs_thermo_overlap(r, c, blocked);
+      if (!path.length) continue;
+
+      for (const [pr, pc] of path) {
+        thermo_occupied.add(K(pr, pc));
+        occupied.add(K(pr, pc));
+      }
+
+      const expanded_area = new Set();
+      for (const [cr, cc] of path)
+        for (const dr of [-1, 0, 1]) for (const dc of [-1, 0, 1]) expanded_area.add(K(cr + dr, cc + dc));
+      const used_colors = new Set();
+      for (const [p_path, p_col] of placed_thermos)
+        if (p_path.some(([a, b]) => expanded_area.has(K(a, b)))) used_colors.add(p_col);
+      const avail_colors = thermo_palette.filter(col => !used_colors.has(col));
+      const chosen_col = avail_colors.length ? avail_colors[0] : rng.choice(thermo_palette);
+
+      placed_thermos.push([path, chosen_col]);
+      thermos.push([path, chosen_col]);
+      total_req_cells += path.length;
+    }
+
+    if (for_eval) {
+      const total_unique = occupied.size;
+      return [cages, thermos, modulos, total_unique, total_req_cells];
+    }
+
+    return [cages, thermos, modulos];
+  }
+
+  eval_layout(ind) {
+    const sub = Math.floor(Math.sqrt(this.size));
+    const counts = Array(this.size).fill(0);
+    const unique_points = new Set();
+    const points = [];
+    const total_rules = Math.floor(ind.length / 2);
+
+    if (total_rules === 0) return [0.0];
+
+    for (let idx = 0; idx < ind.length; idx += 2) {
+      const r = ind[idx], c = ind[idx + 1];
+      counts[Math.floor(r / sub) * sub + Math.floor(c / sub)] += 1;
+      unique_points.add(K(r, c));
+      points.push([r, c]);
+    }
+
+    const box_range = Math.max(...counts) - Math.min(...counts);
+    const f_balance = 1.0 - (box_range / Math.max(1, total_rules));
+    const f_overlap = unique_points.size / Math.max(1, total_rules);
+
+    const point_counts = new Map();                       // Counter(points)
+    for (const [r, c] of points) point_counts.set(K(r, c), (point_counts.get(K(r, c)) || 0) + 1);
+    const processed = new Set();
+    let symmetric_pairs = 0;
+    for (const [key, cnt] of point_counts) {
+      if (processed.has(key)) continue;
+      const [r, c] = key.split(",").map(Number);
+      const mirror = K(this.size - 1 - r, this.size - 1 - c);
+      processed.add(key);
+      if (mirror === key) continue;
+      const mirror_cnt = point_counts.get(mirror) || 0;
+      symmetric_pairs += Math.min(cnt, mirror_cnt);
+      processed.add(mirror);
+    }
+
+    const max_pairs = Math.floor(total_rules / 2);
+    const f_symmetry = Math.min(1.0, symmetric_pairs / Math.max(1, max_pairs));
+
+    const w1 = GameConfig.WEIGHT_SYMMETRY;
+    const w2 = GameConfig.WEIGHT_BALANCE;
+    const w3 = GameConfig.WEIGHT_SPACE;
+    const fitness = (w1 * f_symmetry) + (w2 * f_balance) + (w3 * f_overlap);
+    return [fitness];
+  }
+}
+
+// ---------- แทน DEAP (base / creator / tools) ----------
+// individual = Array ที่มีคุณสมบัติ .fit (null = fitness ยังไม่ valid)
+const deap_tools = {
+  initRepeat(container, func, n) { const a = []; for (let i = 0; i < n; i++) a.push(func()); return a; },
+  cxTwoPoint(ind1, ind2) {
+    const size = Math.min(ind1.length, ind2.length);
+    let cxpoint1 = randint(1, size);
+    let cxpoint2 = randint(1, size - 1);
+    if (cxpoint2 >= cxpoint1) cxpoint2 += 1;
+    else [cxpoint1, cxpoint2] = [cxpoint2, cxpoint1];
+    for (let i = cxpoint1; i < cxpoint2; i++) [ind1[i], ind2[i]] = [ind2[i], ind1[i]];
+    return [ind1, ind2];
+  },
+  mutUniformInt(ind, low, up, indpb) {
+    for (let i = 0; i < ind.length; i++) if (Math.random() < indpb) ind[i] = randint(low, up);
+    return [ind];
+  },
+  selTournament(individuals, k, tournsize) {
+    const chosen = [];
+    for (let i = 0; i < k; i++) {
+      let best = null;
+      for (let j = 0; j < tournsize; j++) {
+        const asp = individuals[Math.floor(Math.random() * individuals.length)];
+        if (best === null || asp.fit[0] > best.fit[0]) best = asp;
+      }
+      chosen.push(best);
+    }
+    return chosen;
+  },
+  selBest(individuals, k) {
+    return individuals.slice().sort((a, b) => b.fit[0] - a.fit[0]).slice(0, k);
+  }
+};
+
+class ConstraintDesignerGA extends ConstraintDesignerBase {
+  constructor(base_grid, counts, ga_params, size = 9) {
+    super(base_grid, counts, size);
+    this.ga_params = ga_params;
+
+    this.toolbox = {};
+    this.toolbox.attr_coord = () => randint(0, this.size - 1);
+    this.toolbox.individual = () => {
+      const ind = deap_tools.initRepeat(Array, this.toolbox.attr_coord, this.gene_len);
+      ind.fit = null;
+      return ind;
+    };
+    this.toolbox.population = (n) => deap_tools.initRepeat(Array, this.toolbox.individual, n);
+    this.toolbox.evaluate = (ind) => this.eval_layout(ind);
+    this.toolbox.mate = deap_tools.cxTwoPoint;
+    this.toolbox.mutate = (ind) => deap_tools.mutUniformInt(ind, 0, this.size - 1, this.ga_params.mut_rate);
+    this.toolbox.select = (pop, k) => deap_tools.selTournament(pop, k, 3);
+    this.toolbox.clone = (ind) => { const c = ind.slice(); c.fit = ind.fit ? ind.fit.slice() : null; return c; };
+  }
+
+  search() {
+    if (this.total_items === 0) return this.toolbox.individual();
+
+    const pop_size = this.ga_params.pop_size;
+    const gens = this.ga_params.gens;
+    const cx_rate = this.ga_params.cx_rate;
+    const mut_rate = this.ga_params.mut_rate;
+    const maintain = this.ga_params.maintain;
+
+    const pop = this.toolbox.population(pop_size);
+    for (const ind of pop) ind.fit = this.toolbox.evaluate(ind);
+
+    for (let g = 0; g < gens; g++) {
+      const offspring = this.toolbox.select(pop, pop.length).map(this.toolbox.clone);
+      for (let i = 0; i + 1 < offspring.length; i += 2) {
+        if (Math.random() < cx_rate) {
+          this.toolbox.mate(offspring[i], offspring[i + 1]);
+          offspring[i].fit = null; offspring[i + 1].fit = null;
+        }
+      }
+
+      for (const mutant of offspring) {
+        if (Math.random() < mut_rate) {
+          this.toolbox.mutate(mutant);
+          mutant.fit = null;
+        }
+      }
+
+      for (const ind of offspring.filter(i => i.fit === null)) ind.fit = this.toolbox.evaluate(ind);
+
+      pop.sort((a, b) => b.fit[0] - a.fit[0]);
+      const elite_count = Math.floor(pop_size * maintain);
+      if (elite_count > 0) {
+        const next = pop.slice(0, elite_count).concat(offspring.slice(0, pop_size - elite_count));
+        pop.length = 0; pop.push(...next);
+      } else {
+        const next = offspring.slice();
+        pop.length = 0; pop.push(...next);
+      }
+
+      if (pop[0].fit[0] >= 1.0) break;
+    }
+
+    return deap_tools.selBest(pop, 1)[0];
+  }
+}
+
+</script>
+
+<script>
+// ==========================================
+// ส่วนที่ 4: GUI ของเกม (พอร์ตจาก PlayableSudokuApp เดิม)
+// ส่วนที่ 1-3 (GameConfig / ILP / GA / decode) อยู่ใน <script id="core">
+// และรันใน Web Worker เพื่อไม่ให้หน้าจอค้างตอนสร้างกระดาน
+// ==========================================
+// ----- โค้ดที่ต่อท้าย core.js ภายใน Web Worker -----
+const WORKER_BOOT = `
+let HIGHS = null;
+let PULP_AVAILABLE = false;
+const HIGHS_BASE = "https://cdn.jsdelivr.net/npm/highs@1.15.3/build/";
+
+// เหมือน try: import pulp ... except ImportError  ของต้นฉบับ
+const ready = (async () => {
+  try {
+    importScripts(HIGHS_BASE + "highs.js");
+    HIGHS = await Module({ locateFile: (f) => HIGHS_BASE + f });
+    PULP_AVAILABLE = true;
+  } catch (e) {
+    console.log("โหลด solver ILP ไม่ได้ จะใช้ backtracking แทน:", e);
+  }
+})();
+
+onmessage = async (ev) => {
+  await ready;
+  const { target_clues, mode, rules, ga_params } = ev.data;
+  try {
+    const [puzzle, solution, actual_clues, phase1_method] = generate_sudoku(target_clues);
+
+    let cages = [], thermos = [], modulos = [];
+    if (mode === "Variant") {
+      postMessage({ stage: "ga" });
+      const designer = new ConstraintDesignerGA(solution, rules, ga_params);
+      const best_genome = designer.search();
+
+      postMessage({ stage: "decode" });
+      [cages, thermos, modulos] = designer.decode(best_genome);
+    }
+    postMessage({ done: { puzzle, solution, actual_clues, method: phase1_method, cages, thermos, modulos } });
+  } catch (e) {
+    postMessage({ error: String(e && e.message || e) });
+  }
+};
+`;
+
+class PlayableSudokuApp {
+  constructor() {
+    this.puzzle_board = null;
+    this.solution_board = null;
+    this.user_board = null;
+    this.is_playing = false;
+
+    this.cages = [];
+    this.thermos = [];
+    this.modulos = [];
+    this.hinted_cells = new Set();
+
+    // --- ตัวจับเวลา ---
+    this.start_time = null;
+    this.timer_job = null;
+    this.final_time = null;
+
+    this.hints_used = 0;
+    this.hint_limit = null;  // null = ไม่จำกัด
+    this.hint_limited_difficulties = new Set(["ปานกลาง", "ยาก", "ยากมาก"]);
+    this.hint_limit_count = 3;
+
+    this.difficulty_clues = {
+      "ง่ายมาก": [47, 55],
+      "ง่าย": [36, 46],
+      "ปานกลาง": [32, 35],
+      "ยาก": [28, 31],
+      "ยากมาก": [17, 27]
+    };
+
+    this.ga_rules_count = {
+      "ง่ายมาก": [8, 8, 8],
+      "ง่าย": [10, 10, 10],
+      "ปานกลาง": [12, 12, 12],
+      "ยาก": [14, 14, 14],
+      "ยากมาก": [16, 16, 16]
+    };
+
+    this.ga_settings = {
+      "ง่ายมาก": { pop_size: 100, gens: 500, cx_rate: 0.8, mut_rate: 0.3, maintain: 0.05 },
+      "ง่าย":    { pop_size: 100, gens: 500, cx_rate: 0.8, mut_rate: 0.3, maintain: 0.05 },
+      "ปานกลาง": { pop_size: 100, gens: 500, cx_rate: 0.8, mut_rate: 0.3, maintain: 0.05 },
+      "ยาก":     { pop_size: 100, gens: 500, cx_rate: 0.8, mut_rate: 0.3, maintain: 0.05 },
+      "ยากมาก":  { pop_size: 100, gens: 500, cx_rate: 0.8, mut_rate: 0.3, maintain: 0.05 }
+    };
+
+    this.cell_size = 60;
+    this.margin = 30;
+    this.selected_cell = null;
+
+    this.create_ui();
+  }
+
+  $(id) { return document.getElementById(id); }
+
+  create_ui() {
+    this.init_worker();
+    this.canvas = this.$("board");
+    this.ctx = this.canvas.getContext("2d");
+    this.status_label = this.$("status");
+    this.timer_label = this.$("timer");
+    this.hint_button = this.$("btnHint");
+
+    this.$("btnNew").onclick = () => this.start_new_game();
+    this.$("btnHint").onclick = () => this.give_hint();
+    this.$("btnSurr").onclick = () => this.surrender();
+    this.$("btnClear").onclick = () => this.clear_clues();
+    this.$("btnSol").onclick = () => this.ask_solution_code();
+
+    this.canvas.addEventListener("click", (e) => this.on_click(e));
+    document.addEventListener("keydown", (e) => this.on_key_press(e));
+
+    // ปุ่มตัวเลขบนหน้าจอ (สำหรับมือถือ)
+    const pad = this.$("pad");
+    for (let n = 1; n <= 9; n++) {
+      const b = document.createElement("button");
+      b.textContent = n;
+      b.onclick = () => this.place_digit(n);
+      pad.appendChild(b);
+    }
+    const del = document.createElement("button");
+    del.textContent = "⌫";
+    del.onclick = () => this.erase_cell();
+    pad.appendChild(del);
+
+    this.draw_empty_board();
+  }
+
+  set_status(text, color, font) {
+    this.status_label.textContent = text;
+    this.status_label.style.color = color || "gray";
+    this.status_label.style.font = font || "14px Arial";
+  }
+
+  // ================= Timer =================
+  format_time(seconds) {
+    seconds = Math.floor(seconds);
+    const h = Math.floor(seconds / 3600), rem = seconds % 3600;
+    const m = Math.floor(rem / 60), s = rem % 60;
+    const pad = (x) => String(x).padStart(2, "0");
+    return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  }
+
+  start_timer() {
+    this.stop_timer();
+    this.final_time = null;
+    this.start_time = performance.now();
+    this.timer_label.textContent = "⏱ เวลา: 00:00";
+    this.timer_job = setInterval(() => this._tick(), 200);
+  }
+
+  _tick() {
+    if (this.start_time === null) return;
+    const elapsed = (performance.now() - this.start_time) / 1000;
+    this.timer_label.textContent = `⏱ เวลา: ${this.format_time(elapsed)}`;
+  }
+
+  stop_timer() {
+    if (this.timer_job !== null) { clearInterval(this.timer_job); this.timer_job = null; }
+    if (this.start_time === null) return null;
+    this.final_time = (performance.now() - this.start_time) / 1000;
+    this.start_time = null;
+    this.timer_label.textContent = `⏱ เวลา: ${this.format_time(this.final_time)}`;
+    return this.final_time;
+  }
+
+  // ================= Game flow =================
+  init_worker() {
+    // core.js (ส่วนที่ 1-3) + WORKER_BOOT รวมเป็น Worker เดียว โหลด solver (HiGHS) ล่วงหน้าเบื้องหลัง
+    const src = document.getElementById("core").textContent + "\n" + WORKER_BOOT;
+    this.worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+    this.job = null;
+    this.worker.onmessage = (ev) => {
+      const d = ev.data;
+      if (!this.job) return;
+      if (d.stage) this.job.onStage(d.stage);
+      else if (d.error) { this.job.reject(new Error(d.error)); this.job = null; }
+      else if (d.done) { this.job.resolve(d.done); this.job = null; }
+    };
+    this.worker.onerror = (e) => {
+      if (this.job) { this.job.reject(new Error(e.message || "worker error")); this.job = null; }
+    };
+  }
+
+  run_worker(payload, onStage) {
+    return new Promise((resolve, reject) => {
+      this.job = { resolve, reject, onStage };
+      this.worker.postMessage(payload);
+    });
+  }
+
+  async start_new_game() {
+    if (this.is_playing) {
+      alert("คุณกำลังเล่นเกมอยู่ ต้องเล่นให้ชนะ หรือกดปุ่ม 'ยอมแพ้' ก่อน จึงจะเริ่มเกมใหม่ได้");
+      return;
+    }
+
+    const mode = document.querySelector('input[name="mode"]:checked').value;
+    const diff = this.$("diff").value;
+    const [min_c, max_c] = this.difficulty_clues[diff];
+    const target_clues = min_c + Math.floor(Math.random() * (max_c - min_c + 1));
+
+    this.set_status(`กำลังสร้างกระดาน (${mode} - ${diff})... โปรดรอ`, "blue");
+    this.timer_label.textContent = "⏱ เวลา: 00:00";
+    this.$("btnNew").disabled = true;
+
+    const rules = this.ga_rules_count[diff];
+    const ga_params = this.ga_settings[diff];
+
+    let data;
+    try {
+      data = await this.run_worker({ target_clues, mode, rules, ga_params }, (stage) => {
+        if (stage === "ga") {
+          if (["ปานกลาง", "ยาก", "ยากมาก"].includes(diff))
+            this.set_status(`รัน GA ด้วย POP=${ga_params.pop_size}, GENS=${ga_params.gens} (อาจใช้เวลาสักครู่)...`, "blue");
+          else
+            this.set_status("กำลังค้นหาจุดเริ่มต้นและประเมินผลด้วย GA... โปรดรอสักครู่", "blue");
+        } else if (stage === "decode") {
+          this.set_status("กำลัง Decode เพื่อแปลงพิกัดเป็นกติกา... โปรดรอสักครู่", "blue");
+        }
+      });
+    } catch (err) {
+      this.set_status("สร้างกระดานไม่สำเร็จ: " + err.message, "red");
+      this.$("btnNew").disabled = false;
+      return;
+    }
+    this.$("btnNew").disabled = false;
+    console.log("Phase I method:", data.method);
+
+    this.puzzle_board = data.puzzle;
+    this.solution_board = data.solution;
+    this.user_board = JSON.parse(JSON.stringify(data.puzzle));
+    this.hinted_cells.clear();
+    const actual_clues = data.actual_clues;
+
+    this.hints_used = 0;
+    this.hint_limit = this.hint_limited_difficulties.has(diff) ? this.hint_limit_count : null;
+    this.update_hint_button_label();
+
+    this.cages = data.cages;
+    this.thermos = data.thermos;
+    this.modulos = data.modulos;
+
+    // สร้างกระดานเสร็จแล้ว แต่ยังซ่อนโจทย์ไว้ก่อน จนกว่าผู้เล่นจะกด "พร้อม"
+    this.is_playing = false;
+    this.selected_cell = null;
+    this.draw_empty_board();
+    this.set_status("สร้างกระดานเสร็จแล้ว กด 'พร้อม' เพื่อเริ่มเล่น", "blue");
+
+    await this.ask_ready();   // รอจนผู้เล่นกดพร้อม
+
+    this.is_playing = true;
+    this.set_status(`เกมเริ่มแล้ว! ระดับ ${diff} (มี ${actual_clues} ตัวเลข)`, "green");
+    this.render_board();
+    this.start_timer();   // เริ่มจับเวลาหลังผู้เล่นกดพร้อม
+  }
+
+  ask_ready() {
+    return new Promise((resolve) => {
+      const win = this.$("readyWin"), btn = this.$("btnReady");
+      const done = () => {
+        win.classList.remove("show");
+        document.removeEventListener("keydown", onKey);
+        resolve();
+      };
+      const onKey = (e) => { if (e.key === "Enter") done(); };
+      btn.onclick = done;
+      document.addEventListener("keydown", onKey);
+      win.classList.add("show");
+      btn.focus();
+    });
+  }
+
+  give_hint() {
+    if (!this.is_playing) return;
+
+    if (this.hint_limit !== null && this.hints_used >= this.hint_limit) {
+      alert(`ระดับความยากนี้ขอคำใบ้ได้สูงสุด ${this.hint_limit} ครั้ง คุณใช้ครบแล้ว`);
+      return;
+    }
+
+    const empty_or_wrong = [];
+    for (let r = 0; r < 9; r++)
+      for (let c = 0; c < 9; c++)
+        if (this.puzzle_board[r][c] === 0 && this.user_board[r][c] !== this.solution_board[r][c])
+          empty_or_wrong.push([r, c]);
+
+    if (empty_or_wrong.length) {
+      const [r, c] = empty_or_wrong[Math.floor(Math.random() * empty_or_wrong.length)];
+      this.user_board[r][c] = this.solution_board[r][c];
+      this.hinted_cells.add(`${r},${c}`);
+      this.hints_used += 1;
+      this.update_hint_button_label();
+      this.render_board();
+      this.check_win();
+    }
+  }
+
+  update_hint_button_label() {
+    if (this.hint_limit === null) {
+      this.hint_button.textContent = "💡 ขอคำใบ้";
+    } else {
+      const remaining = Math.max(0, this.hint_limit - this.hints_used);
+      this.hint_button.textContent = `💡 ขอคำใบ้ (${remaining}/${this.hint_limit})`;
+    }
+  }
+
+  surrender() {
+    if (!this.is_playing) return;
+    this.is_playing = false;
+    this.stop_timer();   // หยุดเวลาเมื่อยอมแพ้
+    this.user_board = JSON.parse(JSON.stringify(this.solution_board));
+    this.selected_cell = null;
+    this.set_status("คุณยอมแพ้แล้ว! นี่คือเฉลย", "red");
+    this.render_board();
+  }
+
+  clear_clues() {
+    if (!this.is_playing) return;
+    if (!confirm("คุณต้องการลบตัวเลขคำใบ้ เฉพาะจุดที่มีกติกาพิเศษทับอยู่ใช่หรือไม่?")) return;
+
+    const special_rule_cells = new Set();
+    for (const [, path] of this.cages) for (const [r, c] of path) special_rule_cells.add(`${r},${c}`);
+    for (const [path] of this.thermos) for (const [r, c] of path) special_rule_cells.add(`${r},${c}`);
+    for (const [[r, c]] of this.modulos) special_rule_cells.add(`${r},${c}`);
+
+    let cleared_count = 0;
+    for (let r = 0; r < 9; r++)
+      for (let c = 0; c < 9; c++)
+        if (special_rule_cells.has(`${r},${c}`) && this.puzzle_board[r][c] !== 0) {
+          this.puzzle_board[r][c] = 0;
+          this.user_board[r][c] = 0;
+          this.hinted_cells.delete(`${r},${c}`);
+          cleared_count++;
+        }
+
+    this.selected_cell = null;
+    this.set_status(`ลบคำใบ้บนกติกาพิเศษสำเร็จ (ลบไป ${cleared_count} ตัวเลข)!`, "#E65100");
+    this.render_board();
+  }
+
+  ask_solution_code() {
+    if (this.solution_board === null) {
+      alert("กรุณาเริ่มเกมใหม่ก่อนดูเฉลย");
+      return;
+    }
+    const win = this.$("codeWin"), input = this.$("codeInput");
+    input.value = "";
+    win.classList.add("show");
+    input.focus();
+
+    const close = () => win.classList.remove("show");
+    const submit = () => {
+      if (input.value.trim() === "6640203094") {
+        close();
+        this.show_solution_popup();
+      } else {
+        alert("รหัสที่กรอกไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง");
+        input.value = "";
+        input.focus();
+      }
+    };
+    input.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+    this.$("codeOk").onclick = submit;
+    this.$("codeCancel").onclick = close;
+  }
+
+  show_solution_popup() {
+    if (this.solution_board === null) return;
+
+    const cell = 42, margin = 15;
+    const cv = this.$("solCanvas"), g = cv.getContext("2d");
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.fillStyle = "white"; g.fillRect(0, 0, cv.width, cv.height);
+
+    g.strokeStyle = "black";
+    for (let i = 0; i < 10; i++) {
+      g.lineWidth = i % 3 === 0 ? 3 : 1;
+      g.beginPath(); g.moveTo(margin + i * cell, margin); g.lineTo(margin + i * cell, margin + 9 * cell); g.stroke();
+      g.beginPath(); g.moveTo(margin, margin + i * cell); g.lineTo(margin + 9 * cell, margin + i * cell); g.stroke();
+    }
+
+    g.font = "bold 24px Arial"; g.textAlign = "center"; g.textBaseline = "middle";
+    for (let r = 0; r < 9; r++)
+      for (let c = 0; c < 9; c++) {
+        const is_given = this.puzzle_board[r][c] !== 0;
+        g.fillStyle = is_given ? "#212121" : "#7B1FA2";
+        g.fillText(String(this.solution_board[r][c]), margin + c * cell + cell / 2, margin + r * cell + cell / 2);
+      }
+
+    const win = this.$("solWin");
+    win.classList.add("show");
+    this.$("solClose").onclick = () => win.classList.remove("show");
+  }
+
+  check_win() {
+    if (!this.is_playing) return;
+
+    // ยังมีช่องว่าง = ยังเล่นไม่ครบ ไม่ต้องตรวจ
+    for (let r = 0; r < 9; r++)
+      for (let c = 0; c < 9; c++)
+        if (this.user_board[r][c] === 0) return;
+
+    // วางครบแล้ว แต่ไม่ตรงเฉลย -> แจ้งเตือนให้ลองวางใหม่
+    for (let r = 0; r < 9; r++)
+      for (let c = 0; c < 9; c++)
+        if (this.user_board[r][c] !== this.solution_board[r][c]) {
+          this.set_status("❌ ยังไม่ถูกต้อง ลองวางใหม่อีกครั้ง", "#C62828");
+          alert("ยังไม่ถูกต้อง ให้ลองวางใหม่");
+          this.set_status(" ", "gray");   // กด OK แล้ว ลบข้อความสีแดงออก
+          return;
+        }
+
+    // ถูกต้องทั้งหมด
+    this.is_playing = false;
+    this.selected_cell = null;
+    const elapsed = this.stop_timer();
+    const time_text = elapsed !== null ? this.format_time(elapsed) : "-";
+    this.set_status(`🎉 ยินดีด้วย! คุณแก้ปริศนาสำเร็จ! ใช้เวลา ${time_text} 🎉`, "#4CAF50", "bold 18px Arial");
+    this.render_board();
+    alert(`ยินดีด้วย คุณทำสำเร็จ!\nเวลาที่ทำได้: ${time_text}`);
+  }
+
+  // ================= Interaction =================
+  on_click(event) {
+    if (!this.is_playing) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const scale = this.canvas.width / rect.width;   // รองรับการย่อ canvas บนมือถือ
+    const x = (event.clientX - rect.left) * scale;
+    const y = (event.clientY - rect.top) * scale;
+    const c = Math.floor((x - this.margin) / this.cell_size);
+    const r = Math.floor((y - this.margin) / this.cell_size);
+    if (r >= 0 && r < 9 && c >= 0 && c < 9) {
+      this.selected_cell = [r, c];
+      this.render_board();
+    }
+  }
+
+  on_key_press(event) {
+    if (!this.is_playing) return;
+    if (event.target && event.target.tagName === "INPUT") return;
+
+    // ปุ่มลูกศร: เลื่อนช่องที่เลือก (เลื่อนผ่านช่องโจทย์ได้ด้วย)
+    const arrow_moves = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    if (arrow_moves[event.key]) {
+      const [dr, dc] = arrow_moves[event.key];
+      if (this.selected_cell === null) this.selected_cell = [0, 0];
+      else {
+        const [r, c] = this.selected_cell;
+        this.selected_cell = [Math.max(0, Math.min(8, r + dr)), Math.max(0, Math.min(8, c + dc))];
+      }
+      this.render_board();
+      event.preventDefault();
+      return;
+    }
+
+    if (event.key.length === 1 && "123456789".includes(event.key)) this.place_digit(parseInt(event.key));
+    else if (event.key === "Backspace" || event.key === "Delete") this.erase_cell();
+  }
+
+  place_digit(n) {
+    if (!this.is_playing || !this.selected_cell) return;
+    const [r, c] = this.selected_cell;
+    if (this.puzzle_board[r][c] !== 0) return;
+    this.user_board[r][c] = n;
+    this.hinted_cells.delete(`${r},${c}`);
+    this.render_board();
+    this.check_win();
+  }
+
+  erase_cell() {
+    if (!this.is_playing || !this.selected_cell) return;
+    const [r, c] = this.selected_cell;
+    if (this.puzzle_board[r][c] !== 0) return;
+    this.user_board[r][c] = 0;
+    this.hinted_cells.delete(`${r},${c}`);
+    this.render_board();
+  }
+
+  // ================= Rendering =================
+  _line(x1, y1, x2, y2) {
+    const g = this.ctx;
+    g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  }
+
+  _grid_lines() {
+    const g = this.ctx, s = this.cell_size, m = this.margin;
+    g.strokeStyle = "black"; g.setLineDash([]); g.lineCap = "butt";
+    for (let i = 0; i < 10; i++) {
+      g.lineWidth = i % 3 === 0 ? 3 : 1;
+      this._line(m + i * s, m, m + i * s, m + 9 * s);
+      this._line(m, m + i * s, m + 9 * s, m + i * s);
+    }
+  }
+
+  draw_empty_board() {
+    const g = this.ctx;
+    g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    g.fillStyle = "white"; g.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this._grid_lines();
+  }
+
+  render_board() {
+    const g = this.ctx, s = this.cell_size, m = this.margin;
+    g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    g.fillStyle = "white"; g.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+    if (this.selected_cell) {
+      const [r, c] = this.selected_cell;
+      g.fillStyle = "#FFFF99";
+      g.fillRect(m + c * s, m + r * s, s, s);
+    }
+
+    // 1. วาดเส้นขอบกรง (เฉพาะขอบ "รอบนอก" ของกรงแต่ละอัน)
+    const cage_inset = 4;
+    for (const [t, path, col] of this.cages) {
+      const cage_cells = new Set(path.map(([r, c]) => `${r},${c}`));
+      g.strokeStyle = col; g.lineWidth = 3; g.setLineDash([5, 3]);
+      for (const [r, c] of path) {
+        const x1 = m + c * s + cage_inset, y1 = m + r * s + cage_inset;
+        const x2 = m + (c + 1) * s - cage_inset, y2 = m + (r + 1) * s - cage_inset;
+        if (!cage_cells.has(`${r - 1},${c}`)) this._line(x1, y1, x2, y1);  // ขอบบน
+        if (!cage_cells.has(`${r + 1},${c}`)) this._line(x1, y2, x2, y2);  // ขอบล่าง
+        if (!cage_cells.has(`${r},${c - 1}`)) this._line(x1, y1, x1, y2);  // ขอบซ้าย
+        if (!cage_cells.has(`${r},${c + 1}`)) this._line(x2, y1, x2, y2);  // ขอบขวา
+      }
+      g.setLineDash([]);
+    }
+
+    // 2. วาดเส้นและกระเปาะ Thermo (สีพาสเทลจาก thermo_palette)
+    for (const [path, t_color] of this.thermos) {
+      if (path.length >= 2) {
+        g.strokeStyle = t_color; g.lineWidth = 12; g.lineCap = "round"; g.lineJoin = "round";
+        g.beginPath();
+        path.forEach(([r, c], i) => {
+          const px = m + c * s + s / 2, py = m + r * s + s / 2;
+          if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+        });
+        g.stroke();
+        g.lineCap = "butt";
+      }
+      if (path.length) {
+        const [r0, c0] = path[0];
+        const bx = m + c0 * s + s / 2, by = m + r0 * s + s / 2;
+        g.fillStyle = t_color;
+        g.beginPath(); g.arc(bx, by, 14, 0, Math.PI * 2); g.fill();
+      }
+    }
+
+    // 3. ตีเส้นตารางกระดานหลัก
+    this._grid_lines();
+
+    // 4. วาดข้อความผลรวมกรง
+    const cage_counts = {};
+    g.textAlign = "left"; g.textBaseline = "top";
+    for (const [t, path, col] of this.cages) {
+      if (!path.length) continue;
+      const [r0, c0] = path[0], k = `${r0},${c0}`;
+      const offset_y = (cage_counts[k] || 0) * 14;
+      cage_counts[k] = (cage_counts[k] || 0) + 1;
+      const cx = m + c0 * s + 4, cy = m + r0 * s + 4 + offset_y;
+      g.fillStyle = "white"; g.fillRect(cx - 1, cy - 1, 17, 14);
+      g.fillStyle = col; g.font = "bold 12px Arial";
+      g.fillText(String(t), cx + 1, cy + 1);
+    }
+
+    // 5. วาดวงกลม Modulo
+    const mod_counts = {};
+    g.textAlign = "center"; g.textBaseline = "middle";
+    for (const [[r, c], [div, rem]] of this.modulos) {
+      const k = `${r},${c}`;
+      const offset_y = (mod_counts[k] || 0) * 18;
+      mod_counts[k] = (mod_counts[k] || 0) + 1;
+      const x = m + c * s, y = m + r * s;
+      const ox1 = x + s - 18, oy1 = y + 4 + offset_y, ox2 = x + s - 4, oy2 = y + 18 + offset_y;
+      g.fillStyle = "#E0E0E0"; g.strokeStyle = "#666"; g.lineWidth = 1;
+      g.beginPath(); g.ellipse((ox1 + ox2) / 2, (oy1 + oy2) / 2, (ox2 - ox1) / 2, (oy2 - oy1) / 2, 0, 0, Math.PI * 2);
+      g.fill(); g.stroke();
+      g.fillStyle = "#222"; g.font = "bold 11px Arial";
+      g.fillText(rem === 1 ? "O" : "E", (ox1 + ox2) / 2, (oy1 + oy2) / 2);
+    }
+
+    // 6. วาดตัวเลขบนกระดาน
+    if (this.user_board) {
+      for (let r = 0; r < 9; r++)
+        for (let c = 0; c < 9; c++) {
+          const val = this.user_board[r][c];
+          if (val === 0) continue;
+          const is_clue = this.puzzle_board[r][c] !== 0;
+          let color, font_w;
+          if (is_clue) { color = "black"; font_w = "bold"; }
+          else if (this.hinted_cells.has(`${r},${c}`)) { color = "#0000FF"; font_w = "bold"; }
+          else { color = "#0D47A1"; font_w = "normal"; }   // น้ำเงินเข้ม อ่านง่ายบนเส้นเทอร์โมสีพาสเทล
+
+          const tx = m + c * s + s / 2, ty = m + r * s + s / 2;
+          g.font = `${font_w} 29px Arial`; g.textAlign = "center"; g.textBaseline = "middle";
+          g.fillStyle = "white"; g.fillText(String(val), tx, ty);
+          g.fillStyle = color;   g.fillText(String(val), tx - 1, ty - 1);
+        }
+    }
+  }
+}
+
+window.addEventListener("DOMContentLoaded", () => { window.app = new PlayableSudokuApp(); });
+</script>
+</body>
+</html>
